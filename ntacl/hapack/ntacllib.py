@@ -115,8 +115,6 @@ def ntacl_lib_get(HAServer, paraList):
     if os.path.exists(paraList['path']) == False:
         return {'status' : 0}
     sd = smb_ntacl.getntacl(paraList['path'])
-    print sd.__ndr_print__()
-    print sd.as_sddl()
     data = sd2dict(paraList['path'], sd)
     return {'status' : 0 , 'data' : data}
 
@@ -126,7 +124,6 @@ def ntacl_lib_set(HAServer, paraList):
 
     if paraList.has_key('acl'):
         sddl = acl2sddl(paraList['path'], paraList['acl'])
-        print sddl
         sd = smb_ntacl.setntacl(paraList['path'], sddl)
     return {'status' : 0}
 

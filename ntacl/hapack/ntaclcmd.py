@@ -3,13 +3,10 @@ import traceback
 import shlex
 
 import sys
-sys.path.append("/var/apache/tomcat/webapps/NAS/misc/HAAgent/Lib/System/")
+sys.path.append("/usr/local/NAS/misc/HAAgent/Lib/System/")
 import ntacllib
 import argparse
 
-
-SYS_SUCCESSFUL = 0
-CMD_UNKNOWN_PARAM = 2
 
 
 class FakeHA:
@@ -65,23 +62,19 @@ class ntacl(cmd.Cmd):
         self.ha = FakeHA()
 
     def do_ntacl(self, args_list):
-        ret = {'status': SYS_SUCCESSFUL}
+        ret = {'status': 0}
         try:
             cmd, namespace = self.parsers.find(args_list)
             func_name = "cmd_" + cmd
             ret = self.adapter_cmd(namespace, func_name)
         except:
             print traceback.format_exc()
-            ret = {'status': CMD_UNKNOWN_PARAM}
+            ret = {'status': 2}
         finally:
             return ret
 
     def adapter_cmd(self, args, func_name):
         ret = getattr(self, func_name)(args)
-        if ret['status'] == 0:
-            ret['status'] = "SYS_SUCCESSFUL"
-        else:
-            return {'status' : 'SYS_FAILED'}
         return ret
 
     def cmd_ntacl_test(self, args):
@@ -105,11 +98,9 @@ class ntacl(cmd.Cmd):
         paras['acl'] = args['a']
         paras['path'] = args['f']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
-        print ret
         return ret
 
     def cmd_ntacl_setown(self, args):
-        print "cmd_ntacl_setown"
         paras = {}
         paras['op'] = "ntacl_lib_setown"
         paras['uid'] = args['o']
@@ -118,18 +109,16 @@ class ntacl(cmd.Cmd):
         return ret
 
     def cmd_ntacl_replace(self, args):
-        print "cmd_ntacl_replace"
         paras = {}
         paras['op'] = "ntacl_lib_replace"
         paras['acl'] = args['a']
         paras['path'] = args['f']
-        print paras
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
 def main():
     nt = ntacl()
-    nt.do_ntacl(sys.argv[1:])
+    print nt.do_ntacl(sys.argv[1:])
     
 if __name__ == "__main__":
     main()

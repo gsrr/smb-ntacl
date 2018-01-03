@@ -5,7 +5,6 @@ import shlex
 from HADefine import *
 from NASHAComm import *
 import sys
-sys.path.append("/var/apache/tomcat/webapps/NAS/misc/HAAgent/")
 sys.path.append(WEB_ROOT+"misc/Cmd/CmdTool/")
 from cmdtool import *
 import argparse

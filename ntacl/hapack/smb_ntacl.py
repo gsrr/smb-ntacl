@@ -102,7 +102,7 @@ def gid_to_sid(gid):
     if sid != None:
         return sid
 
-    return "S-1-22-2-%d"%uid
+    return "S-1-22-2-%d"%gid
 
 class SmbDefine:
     def __init__(self):
@@ -169,7 +169,12 @@ def is_sid_domain(sid):
     elif "ldapsam" in lp.get("passdb backend"):
         return sid_to_uid_ldap(sid)
     else:
-        return (sid, 1)
+        if "S-1-22-1" in sid:
+            return (sid, 1)
+        elif "S-1-22-2" in sid:
+            return (sid, 2)
+        else:
+            return (sid, 1)
     
 def sid_to_uid(sid):
     uinfo = is_sid_local(sid)
