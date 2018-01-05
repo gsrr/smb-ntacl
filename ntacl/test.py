@@ -16,6 +16,21 @@ FILE = 4097
 6. map unix group to smb group
 '''
 
+def testcmd_modifygroup():
+    os.system('echo -e "useradmin group add group002 -z a@0\nexit\n" | NASCLI')
+    os.system('echo -e "useradmin group delete group102 -z a@0\nexit\n" | NASCLI')
+    os.system('echo -e "useradmin group modify group002 -n group102 -z a@0\nexit\n" | NASCLI')
+    os.system("net groupmap list")
+
+def testcmd_deletegroup():
+    os.system('echo -e "useradmin group delete group002 -z a@0\nexit\n" | NASCLI')
+    os.system("net groupmap list")
+
+def testcmd_addgroup_new():
+    os.system('echo -e "useradmin group delete group002 -z a@0\nexit\n" | NASCLI')
+    os.system('echo -e "useradmin group add group002 -z a@0\nexit\n" | NASCLI')
+    os.system("net groupmap list")
+
 def testcmd_set_folder_replaceAll1(): # this folder, subfolder, and file
     os.system("rm -rf /tmp/folder")
     os.system("mkdir /tmp/folder")

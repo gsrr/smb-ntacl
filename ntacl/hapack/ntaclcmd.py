@@ -6,6 +6,7 @@ import sys
 sys.path.append("/usr/local/NAS/misc/HAAgent/Lib/System/")
 import ntacllib
 import argparse
+import json
 
 
 
@@ -75,7 +76,7 @@ class ntacl(cmd.Cmd):
 
     def adapter_cmd(self, args, func_name):
         ret = getattr(self, func_name)(args)
-        return ret
+        return json.dumps(ret, ensure_ascii=False)
 
     def cmd_ntacl_test(self, args):
         paras = {}

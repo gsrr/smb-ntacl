@@ -163,16 +163,16 @@ def sid_to_uid_ldap(sid):
         return (sid, 1)
     
 def is_sid_domain(sid):
-    lp = get_lp("/etc/samba/smb.conf")
-    if len(lp.get("realm")) != 0:
-        return sid_to_uid_winbind(sid)
-    elif "ldapsam" in lp.get("passdb backend"):
-        return sid_to_uid_ldap(sid)
+    if "S-1-22-1" in sid:
+        return (sid.split("-")[-1], 1)
+    elif "S-1-22-2" in sid:
+        return (sid.split("-")[-1], 2)
     else:
-        if "S-1-22-1" in sid:
-            return (sid, 1)
-        elif "S-1-22-2" in sid:
-            return (sid, 2)
+        lp = get_lp("/etc/samba/smb.conf")
+        if len(lp.get("realm")) != 0:
+            return sid_to_uid_winbind(sid)
+        elif "ldapsam" in lp.get("passdb backend"):
+            return sid_to_uid_ldap(sid)
         else:
             return (sid, 1)
     
