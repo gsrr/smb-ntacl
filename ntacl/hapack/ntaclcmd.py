@@ -26,21 +26,23 @@ class NTACLParser:
 
         self.parser_ntacl_get = argparse.ArgumentParser(prog="ntacl_get", add_help=False)
         self.parser_ntacl_get.add_argument("-f", nargs="?", required=True)
-        self.parser_ntacl_get.add_argument("-z", nargs="?", required=True)
+        self.parser_ntacl_get.add_argument("-u", nargs="?", required=True)
 
         self.parser_ntacl_set = argparse.ArgumentParser(prog="ntacl_set", add_help=False)
         self.parser_ntacl_set.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_set.add_argument("-a", nargs="?", required=True)
-        self.parser_ntacl_set.add_argument("-z", nargs="?", required=True)
+        self.parser_ntacl_set.add_argument("-u", nargs="?", required=True)
 
         self.parser_ntacl_setown = argparse.ArgumentParser(prog="ntacl_setown", add_help=False)
         self.parser_ntacl_setown.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_setown.add_argument("-o", nargs="?", required=True)
+        self.parser_ntacl_setown.add_argument("-u", nargs="?", required=True)
+        self.parser_ntacl_setown.add_argument("-r", nargs="?", required=True)
 
         self.parser_ntacl_replace = argparse.ArgumentParser(prog="ntacl_replace", add_help=False)
         self.parser_ntacl_replace.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_replace.add_argument("-a", nargs="?", required=True)
-        self.parser_ntacl_replace.add_argument("-z", nargs="?", required=True)
+        self.parser_ntacl_replace.add_argument("-u", nargs="?", required=True)
 
     def find(self, args):
         cnt = 0
@@ -90,6 +92,7 @@ class ntacl(cmd.Cmd):
         paras = {}
         paras['op'] = "ntacl_lib_get"
         paras['path'] = args['f']
+        paras['user'] = args['u']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
@@ -98,6 +101,7 @@ class ntacl(cmd.Cmd):
         paras['op'] = "ntacl_lib_set"
         paras['acl'] = args['a']
         paras['path'] = args['f']
+        paras['user'] = args['u']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
@@ -106,6 +110,8 @@ class ntacl(cmd.Cmd):
         paras['op'] = "ntacl_lib_setown"
         paras['uid'] = args['o']
         paras['path'] = args['f']
+        paras['user'] = args['u']
+        paras['recursive'] = args['r']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
@@ -114,6 +120,7 @@ class ntacl(cmd.Cmd):
         paras['op'] = "ntacl_lib_replace"
         paras['acl'] = args['a']
         paras['path'] = args['f']
+        paras['user'] = args['u']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
