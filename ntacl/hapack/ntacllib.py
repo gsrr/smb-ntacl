@@ -9,58 +9,6 @@ import json
 
 SEC_ACE_FLAG_INHERITED_ACE = 0x0010
 
-def sd_get_owner_rid(owner_sid):
-    return owner_sid.split("-")[-1]
-
-def sd_get_unix_rid(owner_sid):
-    return owner_sid
-
-def get_localsid():
-    line = commands.getoutput("net getlocalsid")
-    localsid = line.split(":")[1].strip()
-    return localsid 
-
-def get_domainsid():
-    pass
-
-class SmbDefind:
-    def __init__(self):
-        self.hostsid = None
-    
-    def init_hostsid():
-        lsid = get_localsid()
-        dsid = get_domainsid()
-        self.hostsid = {
-            'lu' : lsid,
-            'lg' : lsid,
-            'du' : dsid,
-            'uu' : 'S-1-22-1',
-            'ug' : 'S-1-22-2'
-        }
-        
-    def get_hostsid(self, ut):
-        if self.hostsid == None:
-            init_hostsid()
-        
-        return self.hostsid[ut]
-         
-    @staticmethod
-    def sid_map(owner_sid):
-        User = {
-            'S-1-1-0' : 'WD',
-            'S-1-3-0' : 'CO',
-            'S-1-3-1' : 'CG',
-            'S-1-22-1' : sd_get_unix_rid, # unix user
-            'S-1-22-2' : sd_get_unix_rid, # unix group
-            'S-1-5-21' : sd_get_owner_rid,
-        }
-        hsid = "-".join(owner_sid.split("-")[0:4])
-        f = User.get(hsid, hsid)
-        if type(f) == str:
-            return f
-        else:
-            return owner_sid
-
 def sd_get_aces(dacl):
     data = []
     for i in xrange(dacl.num_aces):
@@ -94,28 +42,29 @@ def sd_replace_acl(sddic, acl):
         tmp['type'] = int(a[0])
         tmp['flags'] = int(a[1])
         tmp['access_mask'] = int(a[2])
-        tmp['rid'] = smb_ntacl.map_uid2sid(a[3])
+        if a[3][0] == 'u':
+            tmp['rid'] = smb_ntacl.uid_to_sid(int(a[3][1:]))
+        else: #g
+            tmp['rid'] = smb_ntacl.gid_to_sid(int(a[3][1:]))
+            
         if tmp['flags'] & SEC_ACE_FLAG_INHERITED_ACE != 0:
             sddic['aces']['inherit'].append(tmp)
         else:
             sddic['aces']['self'].append(tmp)
 
 def acl2sddl(path, acl):
-    sd = smb_ntacl.getntacl(path)
+    sd = smb_ntacl._getntacl(path)
     sddic = smb_ntacl.ntacl_parser_from_sd(sd)
     sd_replace_acl(sddic, acl)
     return smb_ntacl.sddic2sddl(sddic)
 
-'''
-1. id of domain user
-2. no security.NTACL in extended attribute
---> not a problem, smb library will convert it automatically.
-'''
 def ntacl_lib_get(HAServer, paraList):
     if os.path.exists(paraList['path']) == False:
         return {'status' : 0}
-    sd = smb_ntacl.getntacl(paraList['path'])
-    data = sd2dict(paraList['path'], sd)
+    ret = smb_ntacl.getntacl(paraList['path'], int(paraList['ck_uid']))
+    if ret['status'] != 0:
+        return ret
+    data = sd2dict(paraList['path'], ret['data'])
     return {'status' : 0 , 'data' : data}
 
 def ntacl_lib_set(HAServer, paraList):
@@ -124,7 +73,7 @@ def ntacl_lib_set(HAServer, paraList):
 
     if paraList.has_key('acl'):
         sddl = acl2sddl(paraList['path'], paraList['acl'])
-        sd = smb_ntacl.setntacl(paraList['path'], sddl)
+        sd = smb_ntacl.setntacl(paraList['path'], int(paraList['ck_uid']), sddl)
     return {'status' : 0}
 
 def ntacl_lib_setown(HAServer, paraList):
@@ -132,8 +81,8 @@ def ntacl_lib_setown(HAServer, paraList):
         if os.path.exists(paraList['path']) == False:
             return {'status' : 0}
         
-        smb_ntacl.setowner(paraList['path'], smb_ntacl.map_uid2sid(paraList['uid']))
-        return {'status' : 0}
+        ret = smb_ntacl.setowner(*[paraList['path'], int(paraList['ck_uid']), int(paraList['uid'])])
+        return ret
     except:
         print traceback.format_exc()
 
@@ -144,8 +93,8 @@ def ntacl_lib_replace(HAServer, paraList):
 
         if paraList.has_key('acl'):
             sddl = acl2sddl(paraList['path'], paraList['acl'])
-            sd = smb_ntacl.replacentacl(paraList['path'], sddl)
-        return {'status' : 0}
+            ret = smb_ntacl.replacentacl(paraList['path'], int(paraList['ck_uid']), sddl)
+        return ret
     except:
         print traceback.format_exc()
 

@@ -1,7 +1,4 @@
 import sys
-import grp
-import pwd
-import smb_ntacl
 
 IFT_ALLOW = 0
 IFT_DENY = 1001
@@ -12,8 +9,7 @@ IFT_READ_PERM = 0x120000
 IFT_CHANGE_PERM = 0x140000
 IFT_CHANGE_OWNER = 0x180000
 
-def permission_check(sids, path, mask):
-    sd = smb_ntacl.getntacl(path)
+def permission_check(sids, sd, mask):
     st = 0
     deny_right = 0
     for i in xrange(st, len(sd.dacl.aces)):
@@ -37,30 +33,17 @@ def permission_check(sids, path, mask):
         return IFT_ALLOW
     return IFT_DENY
 
-def get_sids_from_uid(nuid):
-    uinfo = pwd.getpwuid(nuid) 
-    gids = [uinfo.pw_gid]
-    gids.extend([g.gr_gid for g in grp.getgrall() if uinfo.pw_name in g.gr_mem]) 
-    sids = [smb_ntacl.uid_to_sid(nuid)]
-    for gid in gids:
-        sids.append(smb_ntacl.gid_to_sid(gid))
-    return sids
+def getntacl(sids, uid, sd):
+    return permission_check(sids, sd, IFT_READ_PERM)
 
-def permission_check_api(uid, path, mask):
-    sids = get_sids_from_uid(int(uid))
-    print permission_check(sids, path, mask)
-    
-def getntacl(uid, path):
-    sids = get_sids_from_uid(int(uid))
-    print permission_check(sids, path, IFT_READ_PERM)
+def setntacl(sids, uid, sd):
+    return permission_check(sids, sd, IFT_CHANGE_PERM)
 
-def setntacl(uid, path):
-    sids = get_sids_from_uid(int(uid))
-    print permission_check(sids, path, IFT_CHANGE_PERM)
+def setowner(sids, uid, sd):
+    return permission_check(sids, sd, IFT_CHANGE_OWNER)
 
-def setowner(uid, path):
-    sids = get_sids_from_uid(int(uid))
-    print permission_check(sids, path, IFT_CHANGE_OWNER)
+def test_get_sids_from_uid(uid):
+    print get_sids_from_uid(int(uid))
 
 def main():
     func = getattr(sys.modules[__name__], sys.argv[1])

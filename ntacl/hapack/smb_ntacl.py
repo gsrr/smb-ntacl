@@ -3,6 +3,10 @@ import sys
 import os
 import copy
 import commands
+import pwd
+import traceback
+import py_getgrouplist
+import ntacl_permission_check
 from samba.samba3 import param as s3param
 from samba.dcerpc import security
 from samba.samba3 import smbd, passdb
@@ -12,17 +16,21 @@ def get_lp(conf):
     lp.load(conf)
     return lp
 
+def get_pdb_local(conf):
+    lp = get_lp(conf)
+    lp.set("passdb backend", 'tdbsam')
+    pdb = passdb.PDB(lp.get('passdb backend'))
+    return pdb
+
 def get_pdb(conf):
-    lp = s3param.get_context()
-    lp.load(conf)
+    lp = get_lp(conf)
     pdb = passdb.PDB(lp.get('passdb backend'))
     return pdb
 
 def is_uid_local(uid):
     try:
-        pdb = get_pdb("/etc/samba/smb.conf.default")
-        lp.set("passdb backend", 'tdbsam')
-        sid = pdb.uid_to_sid(int(uid))    
+        pdb = get_pdb_local("/etc/samba/smb.conf.default")
+        sid = pdb.uid_to_sid(uid)    
         return str(sid)
     except:
         return None
@@ -49,22 +57,30 @@ def is_uid_domain(uid):
         return uid_to_sid_ldap(uid)
     else:
         return None
-    
-def uid_to_sid(uid):
-    sid = is_uid_local(uid) 
-    if sid != None:
-        return sid
 
-    sid = is_uid_domain(uid) 
-    if sid != None:
-        return sid
-
+def is_uid_unix(uid):
     return "S-1-22-1-%d"%uid
+
+def execmds(cmds, *args):
+    for cmd in cmds:
+        ret = cmd(*args)
+        if ret != None:
+            return ret
+ 
+def uid_to_sid(uid):
+    '''
+        uid : int
+    '''
+    cmds = [
+        is_uid_local,
+        is_uid_domain,
+        is_uid_unix,
+    ]
+    return execmds(cmds, uid)
 
 def is_gid_local(gid):
     try:
-        pdb = get_pdb("/etc/samba/smb.conf")
-        lp.set("passdb backend", 'tdbsam')
+        pdb = get_pdb_local("/etc/samba/smb.conf")
         sid = pdb.gid_to_sid(int(gid))    
         return str(sid)
     except:
@@ -93,16 +109,19 @@ def is_gid_domain(gid):
     else:
         return None
 
-def gid_to_sid(gid):
-    sid = is_gid_local(gid) 
-    if sid != None:
-        return sid
-
-    sid = is_gid_domain(gid) 
-    if sid != None:
-        return sid
-
+def is_gid_unix(gid):
     return "S-1-22-2-%d"%gid
+
+def gid_to_sid(gid):
+    '''
+        gid : int
+    '''
+    cmds = [
+        is_gid_local,
+        is_gid_domain,
+        is_gid_unix,
+    ]
+    return execmds(cmds, gid)
 
 class SmbDefine:
     def __init__(self):
@@ -118,7 +137,7 @@ class SmbDefine:
         return User.get(sid, sid)
 
     @staticmethod
-    def map_uid2sid(uid):
+    def uid_to_sid(uid):
         User = {
             'WD' : 'S-1-1-0',
             'CO' : 'S-1-3-0',
@@ -135,13 +154,9 @@ class SmbDefine:
                 return gid_to_sid(int(nuid))
             return uid
           
-def map_uid2sid(uid):	
-    return SmbDefine.map_uid2sid(uid)
-
 def is_sid_local(sid):
     try:
-        pdb = get_pdb("/etc/samba/smb.conf.default")
-        lp.set("passdb backend", 'tdbsam')
+        pdb = get_pdb_local("/etc/samba/smb.conf.default")
         uinfo = pdb.sid_to_uid(int(uid))    
         return uinfo
     except:
@@ -184,21 +199,59 @@ def sid_to_uid(sid):
     uinfo = is_sid_domain(sid) 
     return uinfo
 
-def getntacl_util(path):
+def _getntacl(path):
     s3conf = s3param.get_context()
     s3conf.load("/etc/samba/smb.conf")
     sd = smbd.get_nt_acl(path, security.SECINFO_OWNER | security.SECINFO_GROUP | security.SECINFO_DACL | security.SECINFO_SACL, service=None)
     return sd
 
-def getntacl(path, sddl = None):
-    return getntacl_util(path)
+def get_sids_from_uid(uid):
+    uinfo = pwd.getpwuid(uid) 
+    ngroup, gids = py_getgrouplist.get_uid_groups(uid)
+    sids = [uid_to_sid(uid)]
+    for i in xrange(ngroup):
+        sids.append(gid_to_sid(gids[i]))
+    return sids
 
-def setowner(path, sid):
-    sd = getntacl(path)
+def permission_check_api(path, uid, mask):
+    sids = get_sids_from_uid(int(uid))
+    sd = _getntacl(path)
+    print ntacl_permission_check.permission_check(sids, sd, int(mask))
+
+
+def permission_check(op):
+    def inner_func(func):
+        def wrap_func(*args):
+            path = args[0]
+            ck_uid = args[1]
+            if ck_uid == 0:
+                return func(*args)
+            else:
+                sd = _getntacl(path)
+                try:
+                    sids = get_sids_from_uid(ck_uid)
+                except:
+                    print traceback.format_exc()
+                    return {'status' : -1, 'msg' : 'can not find user'}
+                ck_func = getattr(sys.modules["ntacl_permission_check"], op)
+                ret = ck_func(sids, ck_uid, sd)
+                if ret == 0:
+                    return func(*args)
+                return {'status' : ret}
+        return wrap_func     
+    return inner_func
+        
+@permission_check('getntacl')
+def getntacl(path, ck_uid):
+    return {'status' : 0, 'data' : _getntacl(path)}
+
+@permission_check('setowner')
+def setowner(path, ck_uid, uid):
+    sid = uid_to_sid(uid)
+    sd = _getntacl(path)
     sddic =  ntacl_parser_from_sd(sd)
     sddic['owner'] = sid
     sddl = sddic2sddl(sddic)
-    print sddl
     sd = security.descriptor.from_sddl(sddl, security.dom_sid())
     smbd_set_ntacl(path, sd)
     return 0
@@ -362,7 +415,7 @@ def smbd_set_ntacl(path, sd):
 
 def setntacl_file(fpath, fsd_dic):
     print fpath
-    sd = getntacl_util(fpath)   
+    sd = _getntacl(fpath)   
     if sd.type & SEC_DESC_DACL_AUTO_INHERITED == 0 and sd.type & SEC_DESC_SACL_PRESENT != 0:
         print "Not set acl", fpath
         return
@@ -377,7 +430,7 @@ def setntacl_file(fpath, fsd_dic):
 
 def setntacl_dir(dpath, dsd_dic):
     print dpath
-    sd = getntacl_util(dpath)   
+    sd = _getntacl(dpath)   
     if sd.type & SEC_DESC_DACL_AUTO_INHERITED == 0 and sd.type & SEC_DESC_SACL_PRESENT != 0:
         print "Not set acl", dpath
         return
@@ -399,7 +452,8 @@ def setntacl_dir(dpath, dsd_dic):
         else:
             setntacl_dir(subpath, dsd_dic)
 
-def setntacl(rootpath, sddl):
+@permission_check('setntacl')
+def setntacl(rootpath, ck_uid, sddl):
     s3conf = s3param.get_context()
     s3conf.load("/etc/samba/smb.conf")
     sd = security.descriptor.from_sddl(sddl, security.dom_sid())
@@ -436,7 +490,8 @@ def replacentacl_dir(dpath, dsd_dic):
         else:
             replacentacl_dir(subpath, dsd_dic)
 
-def replacentacl(rootpath, sddl):
+@permission_check('setntacl')
+def replacentacl(rootpath, ck_uid, sddl):
     s3conf = s3param.get_context()
     s3conf.load("/etc/samba/smb.conf")
     sd = security.descriptor.from_sddl(sddl, security.dom_sid())
@@ -472,19 +527,15 @@ def test_getntacl(path):
     sd = getntacl(path)
     print sd.as_sddl()
 
-def test_map_uid2sid():
-    print map_uid2sid("u11001206")
+def test_uid_to_sid(uid):
+    print uid_to_sid(int(uid))
+
+def test_gid_to_sid(gid):
+    print gid_to_sid(int(gid))
 
 def main():
-    if sys.argv[1] == "getntacl":
-        print getntacl(sys.argv[2])
-    elif sys.argv[1] == "test_setntacl":
-        test_setntacl(sys.argv[2], sys.argv[3])
-    elif sys.argv[1] == "ntacl_parser":
-        ntacl_parser(sys.argv[2])
-    else:
-        func = getattr(sys.modules[__name__], sys.argv[1])
-        func()
+    func = getattr(sys.modules[__name__], sys.argv[1])
+    func(*sys.argv[2:])
     
 if __name__ == "__main__":
     main()
