@@ -5,35 +5,45 @@ import shlex
 from HADefine import *
 from NASHAComm import *
 import sys
-sys.path.append(WEB_ROOT+"misc/Cmd/CmdTool/")
 from cmdtool import *
 import argparse
 
 class NTACLParser:
     def __init__(self):
-        self.cmds = ['ntacl_test', 'ntacl_get', 'ntacl_set', 'ntacl_setown', 'ntacl_replace']
+        self.cmds = ['ntacl_test', 'ntacl_get', 'ntacl_set', 'ntacl_setown', 'ntacl_replace', 'ntacl_permission']
         self.parser_ntacl = argparse.ArgumentParser(prog="ntacl", add_help=False)
         self.parser_ntacl_test = argparse.ArgumentParser(prog="ntacl_test", add_help=False)
         self.parser_ntacl_test.add_argument("-z", nargs="?", required=True)
 
         self.parser_ntacl_get = argparse.ArgumentParser(prog="ntacl_get", add_help=False)
         self.parser_ntacl_get.add_argument("-f", nargs="?", required=True)
+        self.parser_ntacl_get.add_argument("-u", nargs="?", required=True, default = '0')
         self.parser_ntacl_get.add_argument("-z", nargs="?", required=True)
 
         self.parser_ntacl_set = argparse.ArgumentParser(prog="ntacl_set", add_help=False)
         self.parser_ntacl_set.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_set.add_argument("-a", nargs="?", required=True)
+        self.parser_ntacl_set.add_argument("-u", nargs="?", required=True, default = '0')
         self.parser_ntacl_set.add_argument("-z", nargs="?", required=True)
 
         self.parser_ntacl_setown = argparse.ArgumentParser(prog="ntacl_setown", add_help=False)
         self.parser_ntacl_setown.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_setown.add_argument("-o", nargs="?", required=True)
+        self.parser_ntacl_setown.add_argument("-u", nargs="?", required=True, default = '0')
+        self.parser_ntacl_setown.add_argument("-r", nargs="?", required=True, default='off')
         self.parser_ntacl_setown.add_argument("-z", nargs="?", required=True)
 
         self.parser_ntacl_replace = argparse.ArgumentParser(prog="ntacl_replace", add_help=False)
         self.parser_ntacl_replace.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_replace.add_argument("-a", nargs="?", required=True)
+        self.parser_ntacl_replace.add_argument("-u", nargs="?", required=True, default = '0')
         self.parser_ntacl_replace.add_argument("-z", nargs="?", required=True)
+        
+        self.parser_ntacl_permission = argparse.ArgumentParser(prog="ntacl_permission", add_help=False)
+        self.parser_ntacl_permission.add_argument("-f", nargs="?", required=True)
+        self.parser_ntacl_permission.add_argument("-m", nargs="?", required=True)
+        self.parser_ntacl_permission.add_argument("-u", nargs="?", required=True)
+        self.parser_ntacl_permission.add_argument("-z", nargs="?", required=True)
 
     def find(self, args):
         cnt = 0
@@ -112,10 +122,10 @@ class ntacl(cmd.Cmd):
         paras = {}
         paras['op'] = "ntacl_lib_get"
         paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
         paras['controller'] = args['ctrl']
         paras['serviceId'] = args['wwn']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
-        print ret
         return ret
 
     def cmd_ntacl_set(self, args):
@@ -123,31 +133,42 @@ class ntacl(cmd.Cmd):
         paras['op'] = "ntacl_lib_set"
         paras['acl'] = args['a']
         paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
         paras['controller'] = args['ctrl']
         paras['serviceId'] = args['wwn']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
-        print ret
         return ret
 
     def cmd_ntacl_setown(self, args):
-        print "cmd_ntacl_setown"
         paras = {}
         paras['op'] = "ntacl_lib_setown"
         paras['uid'] = args['o']
         paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
+        paras['recursive'] = args['r']
         paras['controller'] = args['ctrl']
         paras['serviceId'] = args['wwn']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
     def cmd_ntacl_replace(self, args):
-        print "cmd_ntacl_replace"
         paras = {}
         paras['op'] = "ntacl_lib_replace"
         paras['acl'] = args['a']
         paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
         paras['controller'] = args['ctrl']
         paras['serviceId'] = args['wwn']
-        print paras
+        ret = self.ha.callGetLocalFunc("ntacllib", paras)
+        return ret
+        
+    def cmd_ntacl_permission(self, args):
+        paras = {}
+        paras['op'] = "ntacl_lib_permission"
+        paras['mask'] = args['m']
+        paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
+        paras['controller'] = args['ctrl']
+        paras['serviceId'] = args['wwn']
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret

@@ -1,6 +1,7 @@
 import os
 import sys
 import nascmd_client
+import smb_ntacl
 
 FOLDER_SUB_FILE = 17
 FILE = 4097
@@ -294,22 +295,56 @@ def test_set_folder_propagate1(): # this folder, subfolder, and file
     os.system('echo -e "ntacl get -f /tmp/folder/file1 -z a@0\nexit\n" | NASCLI')
     os.system('echo -e "ntacl get -f /tmp/folder/file2 -z a@0\nexit\n" | NASCLI')
 
-def test_set_file():
-    os.system("rm -rf /tmp/folder")
-    os.system("mkdir /tmp/folder")
-    os.system("touch /tmp/folder/file")
-    os.system('echo -e "ntacl set -f /tmp/folder/file -a (0;0;2032031;u100001):(0;0;1179785;WD) -z a@0\nexit\n" | NASCLI')
-    os.system('echo -e "ntacl get -f /tmp/folder/file -z a@0\nexit\n" | NASCLI')
+def test_integrate(func):
+    def wrap_func(tpath):
+        s_sddl = "O:S-1-5-21-2896997548-2896997548-2896997548-100001G:S-1-22-2-0D:(A;;0x001f01ff;;;S-1-5-21-2896997548-2896997548-2896997548-100001)"
+        func(tpath)
+        sd = smb_ntacl._getntacl(tpath)    
+        print sd.as_sddl()
+        print s_sddl
+        print sd.as_sddl() == s_sddl
+    return wrap_func
+
+def execcmds(cmds):
+    for cmd in cmds:
+        os.system(cmd)
+
+@test_integrate
+def test_replace_file(tpath):
+    cmds = [
+        'rm -rf /tmp/folder',
+        'mkdir /tmp/folder',
+        'touch /tmp/folder/file',
+        'echo -e "ntacl replace -f /tmp/folder -a (0;3;2032127;u100001) -z a@0\nexit\n" | NASCLI',
+        'echo -e "ntacl setown -f /tmp/folder/file -o u100001 -z a@0\nexit\n" | NASCLI',
+        'echo -e "ntacl get -f /tmp/folder/file -z a@0\nexit\n" | NASCLI',
+    ]
+    execcmds(cmds)
+
+@test_integrate
+def test_set_file(tpath):
+    cmds = [
+        'rm -rf /tmp/folder',
+        'mkdir /tmp/folder',
+        'touch /tmp/folder/file',
+        'echo -e "ntacl set -f /tmp/folder/file -a (0;0;2032127;u100001) -z a@0\nexit\n" | NASCLI',
+        'echo -e "ntacl setown -f /tmp/folder/file -o u100001 -z a@0\nexit\n" | NASCLI',
+        'echo -e "ntacl get -f /tmp/folder/file -z a@0\nexit\n" | NASCLI',
+    ]
+    execcmds(cmds)
 
 def test_get_file():
-    os.system("rm -rf /tmp/folder")
-    os.system("mkdir /tmp/folder")
-    os.system("touch /tmp/folder/file")
-    os.system('echo -e "ntacl get -f /tmp/folder/file -z a@0\nexit\n" | NASCLI')
+    cmds = [
+        'rm -rf /tmp/folder',
+        'mkdir /tmp/folder',
+        'touch /tmp/folder/file',
+        'echo -e "ntacl get -f /tmp/folder/file -z a@0\nexit\n" | NASCLI',
+    ]
+    execcmds(cmds)
 
 def main():
     func = getattr(sys.modules[__name__], sys.argv[1])
-    func()
+    func(*sys.argv[2:])
 
 if __name__ == "__main__":
     main()

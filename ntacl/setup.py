@@ -26,6 +26,8 @@ def callSetup(deployMnt):
             (deployMnt + '/NAS/misc/HAAgent/Config', ['hapack/NTACLConfig.py']),
             (deployMnt + '/NAS/misc/agent/python/ntacl', ['hapack/ntaclcmd.py']),
             ('/usr/lib64/python2.7/site-packages', ['hapack/smb_ntacl.py']),
+            ('/usr/lib64/python2.7/site-packages', ['hapack/ntacl_permission_check.py']),
+            ('/usr/lib64/python2.7/site-packages', ['hapack/iftsmb.py']),
             (deployMnt + '/NAS/misc/HAAgent/Lib/User', ['hapack/restoreUser.py']),
             (deployMnt + '/NAS/misc/HAAgent/Lib/User', ['hapack/userOperation.py']),
         ] + walkall("buildroot", deployMnt),

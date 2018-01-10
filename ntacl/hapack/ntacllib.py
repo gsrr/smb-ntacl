@@ -7,6 +7,14 @@ import copy
 import commands
 import json
 
+'''
+1. uid_to_sid is running too long if the uid is not exist.
+(add sid when getntacl)
+
+2.
+'''
+
+
 SEC_ACE_FLAG_INHERITED_ACE = 0x0010
 
 def sd_get_aces(dacl):
@@ -33,7 +41,6 @@ def sd2dict(path, sd):
     return data
 
 def sd_replace_acl(sddic, acl):
-    line = commands.getoutput("net getlocalsid")
     sddic['aces'] = {'self' : [], 'inherit' : []}
     acls = acl.split(":")
     for astr in acls:
@@ -44,8 +51,10 @@ def sd_replace_acl(sddic, acl):
         tmp['access_mask'] = int(a[2])
         if a[3][0] == 'u':
             tmp['rid'] = smb_ntacl.uid_to_sid(int(a[3][1:]))
-        else: #g
+        elif a[3][0] == 'g': #g
             tmp['rid'] = smb_ntacl.gid_to_sid(int(a[3][1:]))
+        else:
+            tmp['rid'] = a[3]
             
         if tmp['flags'] & SEC_ACE_FLAG_INHERITED_ACE != 0:
             sddic['aces']['inherit'].append(tmp)
@@ -81,22 +90,26 @@ def ntacl_lib_setown(HAServer, paraList):
         if os.path.exists(paraList['path']) == False:
             return {'status' : 0}
         
-        ret = smb_ntacl.setowner(*[paraList['path'], int(paraList['ck_uid']), int(paraList['uid'])])
+        ret = smb_ntacl.setowner(paraList['path'], int(paraList['ck_uid']), int(paraList['uid'][1:]), paraList['recursive'])
+        return {'status' : ret}
+    except:
+        return {'status' : -999, 'data' : traceback.format_exc()}
+
+def ntacl_lib_permission(HAServer, paraList):
+    try:
+        ret = smb_ntacl.permission_check_api(int(paraList['ck_uid']), paraList['path'], int(paraList['mask']))
         return ret
     except:
         print traceback.format_exc()
 
 def ntacl_lib_replace(HAServer, paraList):
-    try:
-        if os.path.exists(paraList['path']) == False:
-            return {'status' : 0}
+    if os.path.exists(paraList['path']) == False:
+        return {'status' : 0}
 
-        if paraList.has_key('acl'):
-            sddl = acl2sddl(paraList['path'], paraList['acl'])
-            ret = smb_ntacl.replacentacl(paraList['path'], int(paraList['ck_uid']), sddl)
-        return ret
-    except:
-        print traceback.format_exc()
+    if paraList.has_key('acl'):
+        sddl = acl2sddl(paraList['path'], paraList['acl'])
+        ret = smb_ntacl.replacentacl(paraList['path'], int(paraList['ck_uid']), sddl)
+    return ret
 
 def ntacllib(HAServer, paraList):
         try:

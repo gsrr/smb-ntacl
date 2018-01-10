@@ -5,7 +5,7 @@ import copy
 import commands
 import pwd
 import traceback
-import py_getgrouplist
+import iftsmb
 import ntacl_permission_check
 from samba.samba3 import param as s3param
 from samba.dcerpc import security
@@ -36,7 +36,8 @@ def is_uid_local(uid):
         return None
 
 def uid_to_sid_winbind(uid):
-    sid = commands.getoutput("wbinfo -U %d"%uid).strip()
+    #sid = commands.getoutput("wbinfo -U %d"%uid).strip() #0.092ms/1, 0.825/100
+    sid = iftsmb.wb_uid_to_sid(uid) # 0.082ms/1, 0.093ms/100
     if "S-1-5-21" in sid: 
         return sid    
     return None
@@ -87,7 +88,8 @@ def is_gid_local(gid):
         return None
 
 def gid_to_sid_winbind(gid):
-    sid = commands.getoutput("wbinfo -G %d"%gid).strip()
+    #sid = commands.getoutput("wbinfo -G %d"%gid).strip() # 0.093ms
+    sid = iftsmb.wb_gid_to_sid(gid) #0.082ms
     if "S-1-5-21" in sid: 
         return sid    
     return None
@@ -178,26 +180,34 @@ def sid_to_uid_ldap(sid):
         return (sid, 1)
     
 def is_sid_domain(sid):
-    if "S-1-22-1" in sid:
+    lp = get_lp("/etc/samba/smb.conf")
+    if len(lp.get("realm")) != 0:
+        return sid_to_uid_winbind(sid)
+    elif "ldapsam" in lp.get("passdb backend"):
+        return sid_to_uid_ldap(sid)
+    else:
+        return (sid, 1)
+
+def is_sid_special(sid):
+    ssid = {
+        'S-1-1-0' : 'WD'
+    }    
+    if ssid.has_key(sid):
+        return (ssid[sid], 1)
+    elif "S-1-22-1" in sid:
         return (sid.split("-")[-1], 1)
     elif "S-1-22-2" in sid:
         return (sid.split("-")[-1], 2)
     else:
-        lp = get_lp("/etc/samba/smb.conf")
-        if len(lp.get("realm")) != 0:
-            return sid_to_uid_winbind(sid)
-        elif "ldapsam" in lp.get("passdb backend"):
-            return sid_to_uid_ldap(sid)
-        else:
-            return (sid, 1)
-    
+        return None
+
 def sid_to_uid(sid):
-    uinfo = is_sid_local(sid)
-    if uinfo != None:
-        return uinfo
-    
-    uinfo = is_sid_domain(sid) 
-    return uinfo
+    cmds = [
+        is_sid_special,
+        is_sid_local,
+        is_sid_domain,
+    ]
+    return execmds(cmds, sid)
 
 def _getntacl(path):
     s3conf = s3param.get_context()
@@ -207,7 +217,7 @@ def _getntacl(path):
 
 def get_sids_from_uid(uid):
     uinfo = pwd.getpwuid(uid) 
-    ngroup, gids = py_getgrouplist.get_uid_groups(uid)
+    ngroup, gids = iftsmb.get_uid_groups(uid)
     sids = [uid_to_sid(uid)]
     for i in xrange(ngroup):
         sids.append(gid_to_sid(gids[i]))
@@ -237,7 +247,8 @@ def permission_check(op):
                 ret = ck_func(sids, ck_uid, sd)
                 if ret == 0:
                     return func(*args)
-                return {'status' : ret}
+                else:
+                    return {'status' : ret, "msg" : "permission deny"}
         return wrap_func     
     return inner_func
         
@@ -245,8 +256,7 @@ def permission_check(op):
 def getntacl(path, ck_uid):
     return {'status' : 0, 'data' : _getntacl(path)}
 
-@permission_check('setowner')
-def setowner(path, ck_uid, uid):
+def _setowner(path, uid, recursive):
     sid = uid_to_sid(uid)
     sd = _getntacl(path)
     sddic =  ntacl_parser_from_sd(sd)
@@ -254,7 +264,18 @@ def setowner(path, ck_uid, uid):
     sddl = sddic2sddl(sddic)
     sd = security.descriptor.from_sddl(sddl, security.dom_sid())
     smbd_set_ntacl(path, sd)
+    if recursive == 'on':
+        for f in os.listdir(path):
+            subpath = path + "/" + f
+            if os.path.isfile(subpath):
+                _setowner(subpath, uid, 'off')
+            else:
+                _setowner(subpath, uid, recursive)
     return 0
+
+@permission_check('setowner')
+def setowner(path, ck_uid, uid, recursive = 'off'):
+    return _setowner(path, uid, recursive)
 
 import re
 
@@ -511,6 +532,11 @@ def replacentacl(rootpath, ck_uid, sddl):
             replacentacl_dir(subpath, dsd_dic)
     return {'status' : 0}
 
+def permission_check_api(uid, path, mask):
+    sids = get_sids_from_uid(uid)
+    sd = _getntacl(path)
+    return ntacl_permission_check.permission_check(sids, sd, int(mask))
+
 def test_setntacl(rootpath, sddl):
     s3conf = s3param.get_context()
     s3conf.load("/etc/samba/smb.conf")
@@ -524,7 +550,7 @@ def test_sd(sddl):
     return sd
     
 def test_getntacl(path):
-    sd = getntacl(path)
+    sd = _getntacl(path)
     print sd.as_sddl()
 
 def test_uid_to_sid(uid):
@@ -532,6 +558,13 @@ def test_uid_to_sid(uid):
 
 def test_gid_to_sid(gid):
     print gid_to_sid(int(gid))
+
+def test_uid_to_sid_winbind(uid):
+    for i in xrange(100):
+        print uid_to_sid_winbind(int(uid))
+
+def test_gid_to_sid_winbind(gid):
+    print gid_to_sid_winbind(int(gid))
 
 def main():
     func = getattr(sys.modules[__name__], sys.argv[1])
