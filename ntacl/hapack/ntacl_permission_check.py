@@ -33,12 +33,22 @@ def permission_check(sids, sd, mask):
         return IFT_ALLOW
     return IFT_DENY
 
+def check_owner(func):
+    def wrap_func(sids, uid, sd):
+        if sids[0] == str(sd.owner_sid):
+            return 0
+        else:
+            return func(sids, uid, sd)
+    return wrap_func
+
 def getntacl(sids, uid, sd):
     return permission_check(sids, sd, IFT_READ_PERM)
 
+@check_owner
 def setntacl(sids, uid, sd):
     return permission_check(sids, sd, IFT_CHANGE_PERM)
 
+@check_owner
 def setowner(sids, uid, sd):
     return permission_check(sids, sd, IFT_CHANGE_OWNER)
 

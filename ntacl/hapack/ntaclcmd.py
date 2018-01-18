@@ -19,7 +19,7 @@ class FakeHA:
 
 class NTACLParser:
     def __init__(self):
-        self.cmds = ['ntacl_test', 'ntacl_get', 'ntacl_set', 'ntacl_setown', 'ntacl_replace']
+        self.cmds = ['ntacl_test', 'ntacl_get', 'ntacl_set', 'ntacl_setown', 'ntacl_replace', 'ntacl_permission']
         self.parser_ntacl = argparse.ArgumentParser(prog="ntacl", add_help=False)
         self.parser_ntacl_test = argparse.ArgumentParser(prog="ntacl_test", add_help=False)
         self.parser_ntacl_test.add_argument("-z", nargs="?", required=True)
@@ -31,18 +31,23 @@ class NTACLParser:
         self.parser_ntacl_set = argparse.ArgumentParser(prog="ntacl_set", add_help=False)
         self.parser_ntacl_set.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_set.add_argument("-a", nargs="?", required=True)
-        self.parser_ntacl_set.add_argument("-u", nargs="?", required=True)
+        self.parser_ntacl_set.add_argument("-u", nargs="?", required=True, default = '0')
 
         self.parser_ntacl_setown = argparse.ArgumentParser(prog="ntacl_setown", add_help=False)
         self.parser_ntacl_setown.add_argument("-f", nargs="?", required=True)
-        self.parser_ntacl_setown.add_argument("-o", nargs="?", required=True, default = '0')
-        self.parser_ntacl_setown.add_argument("-u", nargs="?", required=True)
-        self.parser_ntacl_setown.add_argument("-r", nargs="?", required=True)
+        self.parser_ntacl_setown.add_argument("-o", nargs="?", required=True)
+        self.parser_ntacl_setown.add_argument("-u", nargs="?", required=True, default = '0')
+        self.parser_ntacl_setown.add_argument("-r", nargs="?", required=True, default='off')
 
         self.parser_ntacl_replace = argparse.ArgumentParser(prog="ntacl_replace", add_help=False)
         self.parser_ntacl_replace.add_argument("-f", nargs="?", required=True)
         self.parser_ntacl_replace.add_argument("-a", nargs="?", required=True)
-        self.parser_ntacl_replace.add_argument("-u", nargs="?", required=True)
+        self.parser_ntacl_replace.add_argument("-u", nargs="?", required=True, default = '0')
+
+        self.parser_ntacl_permission = argparse.ArgumentParser(prog="ntacl_permission", add_help=False)
+        self.parser_ntacl_permission.add_argument("-f", nargs="?", required=True)
+        self.parser_ntacl_permission.add_argument("-m", nargs="?", required=True)
+        self.parser_ntacl_permission.add_argument("-u", nargs="?", required=True)
 
     def find(self, args):
         cnt = 0
@@ -71,14 +76,14 @@ class ntacl(cmd.Cmd):
             func_name = "cmd_" + cmd
             ret = self.adapter_cmd(namespace, func_name)
         except:
-            print traceback.format_exc()
+            #print traceback.format_exc()
             ret = {'status': 2}
         finally:
-            return ret
+            return json.dumps(ret, ensure_ascii=False)
 
     def adapter_cmd(self, args, func_name):
         ret = getattr(self, func_name)(args)
-        return json.dumps(ret, ensure_ascii=False)
+        return ret
 
     def cmd_ntacl_test(self, args):
         paras = {}
@@ -124,9 +129,19 @@ class ntacl(cmd.Cmd):
         ret = self.ha.callGetLocalFunc("ntacllib", paras)
         return ret
 
+    def cmd_ntacl_permission(self, args):
+        paras = {}
+        paras['op'] = "ntacl_lib_permission"
+        paras['mask'] = args['m']
+        paras['path'] = args['f']
+        paras['ck_uid'] = args['u']
+        ret = self.ha.callGetLocalFunc("ntacllib", paras)
+        return ret
+
 def main():
     nt = ntacl()
-    print nt.do_ntacl(sys.argv[1:])
+    ret = nt.do_ntacl(sys.argv[1:])
+    print ret
     
 if __name__ == "__main__":
     main()
