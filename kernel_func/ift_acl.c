@@ -417,7 +417,7 @@ enum ndr_err_code ndr_pull_security_acl(struct ndr_pull *ndr, int ndr_flags, str
 	return NDR_ERR_SUCCESS;
 }
 
-enum ndr_err_code get_acl_entries(struct ndr_pull *ndr, int ndr_flags, struct acl_entry *entries)
+enum ndr_err_code get_ndr_acl_entries(struct ndr_pull *ndr, int ndr_flags, struct acl_entry *entries)
 {
 	uint16_t level;
 	uint16_t _level;
@@ -589,6 +589,7 @@ int ift_permission_check(struct acl_entry *entries, int mask)
  *
  * */
 
+/*
 int ift_inode_permission(struct dentry* victim, int mask)
 {
 	int ret = 0;
@@ -617,6 +618,132 @@ int ift_inode_permission(struct dentry* victim, int mask)
 	    	get_acl_entries(&ndr, NDR_SCALARS | NDR_BUFFERS, &entries);
 		ret = ift_permission_check(&entries, mask);
 		kfree(entries.aces);
+		kfree(value);
+		printk(KERN_INFO "permission check(0--> success, ~0--> fail):%d\n", ret);
+	}
+	return ret;
+}
+*/
+
+/* Big endian */
+int read_bytes(char* value, int size, int* offset)
+{
+    int num = 0;
+    int i;
+    for(i = 0 ; i < size ; i++)
+    {
+        num = num << 8;
+        num |= (value[*offset + i] & 0xff);
+    }
+    *offset += size;
+    return num;
+}
+
+void permission_combine(int *right, char flags, int access_mask, char role, int id, int owner, int group)
+{
+	kuid_t fsuid = current_fsuid();
+	/*
+	kgid_t fsgid = current_fsgid();
+	struct cred *cred = current_cred();
+	struct group_info *group_info = cred->group_info;
+	*/
+	
+	printk(KERN_INFO "fsuid:%d\n", fsuid.val);
+	printk(KERN_INFO "id:%d\n", id);
+	printk(KERN_INFO "role:%d\n", role);
+
+	if(role == 100) /* Ignore */
+	{
+		printk(KERN_INFO "Ignore\n");
+		return;
+	}
+
+	if(role == 1) /* user */
+	{
+		if(fsuid.val == id)
+		{
+			printk(KERN_INFO "user match\n");
+			*right |= access_mask;
+		}
+	}
+	else if(role == 2) /* group */
+	{
+		kgid_t tgid = {id};
+		if(in_group_p(tgid))
+		{
+			printk(KERN_INFO "group find\n");
+			*right |= access_mask;
+		}
+	}
+	else if(role == 3) /* Everyone */
+	{
+		printk(KERN_INFO "Everyone match\n");
+		*right |= access_mask;
+	}
+	else if(role == 4) /* CO */
+	{
+		printk(KERN_INFO "create owner match\n");
+		if(fsuid.val == owner)
+		{
+			*right |= access_mask;
+		}
+	}
+}
+
+int ift_permission_check2(char* value, int mask)
+{
+	int offset = 0;
+	int owner = read_bytes(value, 4, &offset);
+	int group = read_bytes(value, 4, &offset);
+	int num = read_bytes(value, 4, &offset);
+	int deny_right = 0;
+	int allow_right = 0;
+	int i;
+	for(i = 0 ; i < num ; i++)
+	{
+		char type = read_bytes(value, 1, &offset);
+		char flags = read_bytes(value, 1, &offset);
+		int access_mask = read_bytes(value, 4, &offset);
+		char role = read_bytes(value, 1, &offset);
+		int id = read_bytes(value, 4, &offset);
+		if(type == 0) /* allow */
+		{
+			permission_combine(&allow_right, flags, access_mask, role, id, owner, group);	
+		}
+		else if(type == 1) /* deny */
+		{
+			permission_combine(&deny_right, flags, access_mask, role, id, owner, group);	
+		}
+	}		
+
+	printk(KERN_INFO "allow right:%d, deny right:%d\n", allow_right, deny_right);
+	if((deny_right & mask) != 0)
+	{
+		return -1; /* not allow */
+	}
+	return  ~((allow_right & mask) == mask);
+}
+
+int ift_inode_permission(struct dentry* victim, int mask)
+{
+	int ret = 0;
+	struct inode *inode = victim->d_inode;
+	char *value;
+	int error = 0;
+	int value_len;
+
+	if(inode->i_op->getxattr != NULL)
+	{
+	
+		value_len = inode->i_op->getxattr(victim, "security.iftacl", NULL, 0);
+		if(value_len < 0)
+		{
+			return value_len;
+		}
+		value = kmalloc(sizeof(char) * (value_len + 1), GFP_KERNEL);
+		memset(value, 0, value_len + 1);
+		error = inode->i_op->getxattr(victim, "security.iftacl", value, value_len);
+		ret = ift_permission_check2(value, mask);
 		kfree(value);
 		printk(KERN_INFO "permission check(0--> success, ~0--> fail):%d\n", ret);
 	}
