@@ -5,8 +5,17 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <linux/posix_acl.h>
 #include "xattr.h"
 #include "byteorder.h"
+
+#define IFT_SUBFOLDER 0x02
+#define IFT_SUBFILE 0x01
+
+#define IFT_NTACL_READ   (0x000001 | 0x000008 | 0x000080 | 0x020000)
+#define IFT_NTACL_WRITE  (0x000002 | 0x000004 | 0x000100 | 0x000010 | 0x040000)
+#define IFT_NTACL_EXEC   0x000020
+
 
 #define NDR_ERR_CODE_IS_SUCCESS(x) (x == NDR_ERR_SUCCESS)
 
@@ -26,6 +35,24 @@
 
 #define _array_size_chk(arr) 0
 #define ZERO_STRUCT(x) memset((char *)&(x), 0, sizeof(x))
+
+struct iftacl_aces
+{
+    char type;
+    char flags;
+    int access;
+    char role;
+    int uid;
+};
+
+struct iftacl_sd
+{
+    int owner;
+    int group;
+    int num_aces;
+    struct iftacl_aces *aces;
+};
+
 
 enum security_descriptor_revision
 {
@@ -750,5 +777,315 @@ int ift_inode_permission(struct dentry* victim, int mask)
 	return ret;
 }
 
+void iftacl_push_to_blob(char* blob, void *value, int size, int *offset)
+{
+    int i = *offset;
+    int* ivalue = (int*) value;
+    if(size == 4)
+    {
+        blob[i] = (*ivalue >> 24) & 0xFF;
+        blob[i + 1] = (*ivalue >> 16) & 0xFF;
+        blob[i + 2] = (*ivalue >> 8) & 0xFF;
+        blob[i + 3] = (*ivalue) & 0xFF;
+    }
+    else if(size == 1)
+    {
+        blob[i] = (*ivalue) & 0xFF;
+    }
+    *offset += size;
+}
+
+void iftacl_sd_to_blob(char* blob, struct iftacl_sd *sd)
+{
+    int offset = 0;
+    int i = 0;
+    iftacl_push_to_blob(blob, &(sd->owner), 4, &offset);
+    iftacl_push_to_blob(blob, &(sd->group), 4, &offset);
+    iftacl_push_to_blob(blob, &(sd->num_aces), 4, &offset);
+    for(i = 0 ; i < sd->num_aces ; i++)
+    {
+            iftacl_push_to_blob(blob, &(sd->aces[i].type), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].flags), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].access), 4, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].role), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].uid), 4, &offset);
+    }
+}
+
+int iftacl_store_blob(struct dentry* victim, char* blob, int size)
+{
+    struct inode *inode = victim->d_inode;
+    return inode->i_op->setxattr(victim, "security.iftacl", blob, size, 0);
+}
+
+int iftacl_get_permission(struct dentry* victim, struct iftacl_sd *sd)
+{
+	int error;
+	int offset = 0;
+	struct inode *inode = victim->d_inode;
+	char* value;
+	int value_len;
+	int i;
+	value_len = inode->i_op->getxattr(victim, "security.iftacl", NULL, 0);
+	if(value_len < 0)
+	{
+		return value_len;
+	}
+	value = kmalloc(sizeof(char) * (value_len + 1), GFP_KERNEL);
+	memset(value, 0, value_len + 1);
+	error = inode->i_op->getxattr(victim, "security.iftacl", value, value_len);
+	if(!error)
+	{
+		kfree(value);	
+		return error;
+	}
+	sd->owner = read_bytes(value, 4, &offset);
+	sd->group = read_bytes(value, 4, &offset);
+	sd->num_aces = read_bytes(value, 4, &offset);
+	sd->aces = (struct iftacl_aces*)kmalloc(sizeof(struct iftacl_aces) * sd->num_aces, GFP_KERNEL);
+	for( i = 0 ;i < sd->num_aces ; i++)
+	{
+		sd->aces[i].type = read_bytes(value, 1, &offset);
+		sd->aces[i].flags = read_bytes(value, 1, &offset);
+		sd->aces[i].access = read_bytes(value, 4, &offset);
+		sd->aces[i].role = read_bytes(value, 1, &offset);
+		sd->aces[i].uid = read_bytes(value, 4, &offset);
+	}
+	kfree(value);	
+	return 0;	
+}
+
+int iftacl_chmod(struct dentry* victim, int *mask)
+{
+	int ret = 0;
+	int error;
+	struct inode *inode = victim->d_inode;
+	char* blob;
+	int blob_len;
+	struct iftacl_sd sd;
+	int i = 0;
+	if(inode->i_op->getxattr != NULL)
+	{
+		error = iftacl_get_permission(victim, &sd);
+		if(!error)
+		{
+			return error;
+		}
+		sd.num_aces = 3;
+		for( i = 0 ;i < sd.num_aces ; i++)
+		{
+			sd.aces[i].type = 0;
+			sd.aces[i].flags = 0;
+			sd.aces[i].access = mask[i];
+			sd.aces[i].role = (i + 1) % 3 + 3; /* 3->others, 4->co, 5->cg*/
+			sd.aces[i].uid = 0;
+		}
+		blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd.num_aces;
+		blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
+		iftacl_sd_to_blob(blob, &sd);
+		ret = iftacl_store_blob(victim,  blob, blob_len);
+		if(ret == 0)
+		{
+			error = inode->i_op->removexattr(victim, "system.posix_acl_access");
+		}
+		kfree(sd.aces);
+		kfree(blob);	
+	}
+	return ret;
+}
+
+int iftacl_chown(struct dentry *victim, int uid)
+{
+	int ret = 0;
+	int error;
+	struct inode *inode = victim->d_inode;
+	char* blob;
+	int blob_len;
+	struct iftacl_sd sd;
+	if(inode->i_op->getxattr != NULL)
+	{
+		error = iftacl_get_permission(victim, &sd);
+		if(!error)
+		{
+			return error;
+		}
+		sd.owner = uid;
+		blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd.num_aces;
+		blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
+		iftacl_sd_to_blob(blob, &sd);
+		ret = iftacl_store_blob(victim,  blob, blob_len);
+		kfree(sd.aces);
+		kfree(blob);	
+	}
+	return ret;
+}
+
+void ntacl_to_posix_acl(struct posix_acl* acl, int idx, char type, int access)
+{
+        if((access & IFT_NTACL_READ) != 0)
+        {
+            if(type == 0)
+            {
+                acl->a_entries[idx].e_perm |= ACL_READ;
+            }
+            else
+            {
+                acl->a_entries[idx].e_perm &= ~ACL_READ;
+            }
+        }
+
+        if((access & IFT_NTACL_WRITE) != 0)
+        {
+            if(type == 0)
+            {
+                acl->a_entries[idx].e_perm |= ACL_WRITE;
+            }
+            else
+            {
+                acl->a_entries[idx].e_perm &= ~ACL_WRITE;
+            }
+
+        }
+        if((access & IFT_NTACL_EXEC) != 0)
+        {
+            if(type == 0)
+            {
+                acl->a_entries[idx].e_perm |=  ACL_EXECUTE;
+            }
+            else
+            {
+                acl->a_entries[idx].e_perm &=  ~ACL_EXECUTE;
+            }
+        }
+
+}
+
+void combine_acl(struct iftacl_sd *sd, int i, struct posix_acl *acl, int *cnt)
+{
+    char type = sd->aces[i].type;
+    char role = sd->aces[i].role;
+    int id = sd->aces[i].uid;
+    int access = sd->aces[i].access;
+    int j;
+    int find = 0;
+    for(j = 0 ; j < *cnt ; j++)
+    {
+	if(role == 1 && acl->a_entries[j].e_tag == ACL_USER && acl->a_entries[j].e_uid.val == id)
+	{
+		find = 1;
+		break;
+	}
+	else if(role == 2 && acl->a_entries[j].e_tag == ACL_GROUP && acl->a_entries[j].e_gid.val == id)
+	{
+		find = 1;
+		break;
+	}
+    }
+    if(find == 0)
+    {
+	if(role == 1)
+	{
+        	acl->a_entries[j].e_tag = ACL_USER;
+		acl->a_entries[j].e_uid.val = id;
+	}
+	else
+	{
+		acl->a_entries[j].e_tag = ACL_GROUP;
+		acl->a_entries[j].e_gid.val = id;
+	}
+        ntacl_to_posix_acl(acl, j, type, access);
+        *cnt += 1;
+    }
+    else
+    {
+        ntacl_to_posix_acl(acl, j, type, access);
+    }
+}
+
+int iftacl_inherit_dir(struct dentry *victim, struct iftacl_sd *sd, struct posix_acl *acl)
+{
+	int ret = 0;
+	char *blob;
+	int blob_len;
+	int cnt = 0;
+	int i = 0;
+	for(i = sd->num_aces - 1 ; i > -1 ; i--)
+	{
+		char af = sd->aces[i].flags;
+		if((af & IFT_SUBFOLDER) == 0)
+		{
+			sd->aces[i].role = 101; /*Not inherit*/
+		}
+		else
+		{
+			combine_acl(sd, i, acl, &cnt);
+		}
+	}
+	acl->a_count = cnt;
+	blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd->num_aces;
+	blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
+	iftacl_sd_to_blob(blob, sd);
+	ret = iftacl_store_blob(victim,  blob, blob_len);
+	kfree(blob);	
+	return ret;
+}
+
+int iftacl_inherit_file(struct dentry *victim, struct iftacl_sd *sd, struct posix_acl *acl)
+{
+	int ret = 0;
+	char *blob;
+	int blob_len;
+	int cnt = 0;
+	int i = 0;
+	for(i = 0 ; i < sd->num_aces ; i++)
+	{
+		char af = sd->aces[i].flags;
+		if((af & IFT_SUBFILE) == 0)
+		{
+			sd->aces[i].role = 101; /*Not inherit*/
+		}
+		else
+		{
+			combine_acl(sd, i, acl, &cnt);
+		}
+	}
+	acl->a_count = cnt;
+	blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd->num_aces;
+	blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
+	iftacl_sd_to_blob(blob, sd);
+	ret = iftacl_store_blob(victim,  blob, blob_len);
+	kfree(blob);	
+	return ret;
+}
+
+int iftacl_inherit(struct dentry *pvictim, struct dentry *cvictim, struct posix_acl *acl)
+{
+	int ret = 0;
+	int error;
+	struct inode *inode = pvictim->d_inode;
+	struct iftacl_sd sd;
+	if(inode->i_op->getxattr != NULL)
+	{
+		error = iftacl_get_permission(pvictim, &sd);
+		if(!error)
+		{
+			return error;
+		}
+		if(S_ISDIR(inode->i_mode))
+		{
+			ret = iftacl_inherit_dir(cvictim, &sd, acl);
+		}
+		else
+		{
+			ret = iftacl_inherit_file(cvictim, &sd, acl);	
+		}
+		kfree(sd.aces);
+	}
+	return ret;
+}
+
 EXPORT_SYMBOL(He1);
 EXPORT_SYMBOL(ift_inode_permission);
+EXPORT_SYMBOL(iftacl_chmod);
+EXPORT_SYMBOL(iftacl_chown);
+EXPORT_SYMBOL(iftacl_inherit);

@@ -585,6 +585,23 @@ int read_bytes(char* value, int size, int* offset)
     return num;
 }
 
+struct iftacl_aces
+{
+    char type;
+    char flags;
+    int access;
+    char role;
+    int uid;
+};
+
+struct iftacl_sd
+{
+    int owner;
+    int group;
+    int num_aces;  
+    struct iftacl_aces *aces;
+};
+
 void test_iftacl()
 {
     char value[XATTR_SIZE];
@@ -614,10 +631,132 @@ void test_iftacl()
     }
 }
 
+void iftacl_push_to_blob(char* blob, void *value, int size, int *offset)
+{
+    int i = *offset;
+    int end = *offset + size;
+    int* ivalue = (int*) value;
+    if(size == 4)
+    {
+        blob[i] = (*ivalue >> 24) & 0xFF;
+        blob[i + 1] = (*ivalue >> 16) & 0xFF;
+        blob[i + 2] = (*ivalue >> 8) & 0xFF;
+        blob[i + 3] = (*ivalue) & 0xFF;
+    }
+    else if(size == 1)
+    {
+        blob[i] = (*ivalue) & 0xFF;
+    }
+    *offset += size;
+}
+
+void iftacl_sd_to_blob(char* blob, struct iftacl_sd *sd)
+{
+    int offset = 0;
+    int i = 0;
+    printf("owner:%d\n", sd->owner); 
+    iftacl_push_to_blob(blob, &(sd->owner), 4, &offset);
+    printf("group:%d\n", sd->group); 
+    iftacl_push_to_blob(blob, &(sd->group), 4, &offset);
+    printf("nums:%d\n", sd->num_aces); 
+    iftacl_push_to_blob(blob, &(sd->num_aces), 4, &offset);
+    for(i = 0 ; i < sd->num_aces ; i++)
+    {
+            iftacl_push_to_blob(blob, &(sd->aces[i].type), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].flags), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].access), 4, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].role), 1, &offset);
+            iftacl_push_to_blob(blob, &(sd->aces[i].uid), 4, &offset);
+    }
+}
+
+void iftacl_store_blob(char* path, char* blob, int size)
+{
+    setxattr(path, "security.iftacl", blob, size, 0); 
+}
+
+void test_iftacl_chmod()
+{
+    char value[XATTR_SIZE];
+    int valueLen = getxattr("/tmp", "security.iftacl", value, XATTR_SIZE);
+    int offset = 0;
+    int owner = read_bytes(value, 4, &offset);
+    int group = read_bytes(value, 4, &offset);
+    struct iftacl_sd sd;
+    char* blob;
+    int i = 0;
+    sd.owner = owner;
+    sd.group = group;
+    sd.num_aces = 3;
+    sd.aces = (struct iftacl_aces*)malloc(sizeof(struct iftacl_aces) * 3);
+    for( i = 0 ;i < 3 ; i++)
+    {
+        sd.aces[i].type = 0;
+        sd.aces[i].flags = 0;
+        sd.aces[i].access = 2032127;
+        sd.aces[i].role = (i + 1) % 3 + 3; /* 3->others, 4->co, 5->cg*/
+        sd.aces[i].uid = 0;
+    }
+    int length = 4 * 3 + sizeof(struct iftacl_aces) * sd.num_aces;
+    printf("length : %d\n", length);
+    blob = (char*)malloc(sizeof(char) * length);
+    iftacl_sd_to_blob(blob, &sd);    
+    for( i = 0 ; i < length ; i++)
+    {
+        printf("%x,", blob[i]);
+    }
+    printf("\n----------\n");
+    iftacl_store_blob("/tmp",  blob, length);
+    removexattr("/tmp", "system.posix_acl_access");
+    free(sd.aces);
+    free(blob);
+}
+
+void test_iftacl_chown()
+{
+    char value[XATTR_SIZE];
+    int valueLen = getxattr("/tmp", "security.iftacl", value, XATTR_SIZE);
+    int offset = 0;
+    int owner = read_bytes(value, 4, &offset);
+    int group = read_bytes(value, 4, &offset);
+    struct iftacl_sd sd;
+    char* blob;
+    int i = 0;
+    sd.owner = 1000;
+    sd.group = group;
+    sd.num_aces = read_bytes(value, 4, &offset);
+    sd.aces = (struct iftacl_aces*)malloc(sizeof(struct iftacl_aces) * sd.num_aces);
+    for( i = 0 ;i < sd.num_aces ; i++)
+    {
+        sd.aces[i].type = read_bytes(value, 1, &offset);
+        sd.aces[i].flags = read_bytes(value, 1, &offset);
+        sd.aces[i].access = read_bytes(value, 4, &offset);
+        sd.aces[i].role = read_bytes(value, 1, &offset);
+        sd.aces[i].uid = read_bytes(value, 4, &offset);
+    }
+    int length = 4 * 3 + sizeof(struct iftacl_aces) * sd.num_aces;
+    printf("length : %d\n", length);
+    blob = (char*)malloc(sizeof(char) * length);
+    iftacl_sd_to_blob(blob, &sd);    
+    for( i = 0 ; i < length ; i++)
+    {
+        printf("%x,", blob[i]);
+    }
+    printf("\n----------\n");
+    iftacl_store_blob("/tmp",  blob, length);
+    removexattr("/tmp", "system.posix_acl_access");
+    free(sd.aces);
+    free(blob);
+}
+
+
 int main(int argc, char **argv) 
 {
-    test_iftacl();
+    test_iftacl_chmod();
+    test_iftacl_chown();
     /*
+    test_iftacl_chmod();
+    test_iftacl();
     DATA_BLOB blob;
     char value[XATTR_SIZE];
     get_blob_from_path(&blob, value, argv[1]);
