@@ -355,7 +355,28 @@ def num2aceflag(flags):
             ret.append(m[1])
     return "".join(ret)
 
-def sddic2sddl(sd_dic): 
+def replace_sddic2sddl(sd_dic):
+    sddl = ["O:%sG:%sD:AI"%(sd_dic['owner'], sd_dic['group'])]
+    daces = []
+    aaces = []
+    for a in [sd_dic['aces']['self'], sd_dic['aces']['inherit']]:
+        for j in xrange(len(a)):
+            tmp = [""] * 6
+            tmp[0] = 'A' if a[j]['type'] == 0 else 'D'
+            tmp[1] = num2aceflag(a[j]['flags'])
+            tmp[2] = "0x%08x"%(a[j]['access_mask'])
+            tmp[-1] = SmbDefine.map_user(a[j]['rid'])
+            if tmp[0] == 'A':
+                aaces.append("(%s)"%(";".join(tmp)))
+            else:
+                daces.append("(%s)"%(";".join(tmp)))
+                
+    sddl.extend(daces)
+    sddl.extend(aaces)
+    return "".join(sddl)
+    
+
+def sddic2sddl(sd_dic):	
     sddl = ["O:%sG:%sD:%s"%(sd_dic['owner'], sd_dic['group'], num2dflags(sd_dic['dflags']))]
     daces = []
     aaces = []
@@ -408,8 +429,13 @@ def get_sd_file(sd_dic):
 
 def get_sd_dir(sd_dic):
     tdic = copy.deepcopy(sd_dic)
+    flags_pop_dic = {
+        0x00 : True, # This folder only
+        0x10 : True, # This folder only
+    }
     for i in xrange(len(tdic['aces']['self']) - 1, -1, -1):
-        if tdic['aces']['self'][i]['flags'] == 0: # acl entry is "this folder only"
+        flags = tdic['aces']['self'][i]['flags']
+        if flags_pop_dic.has_key(flags):
             tdic['aces']['self'].pop(i)
             continue
 
@@ -429,7 +455,8 @@ def get_sd_dir(sd_dic):
         tdic['aces']['self'][i]['flags'] |= SEC_ACE_FLAG_INHERITED_ACE
 
     for i in xrange(len(tdic['aces']['inherit']) - 1, -1, -1):
-        if tdic['aces']['inherit'][i]['flags'] == 0:
+        flags = tdic['aces']['inherit'][i]['flags']
+        if flags_pop_dic.has_key(flags):
             tdic['aces']['inherit'].pop(i)
             continue
         tdic['aces']['inherit'][i]['flags'] |= SEC_ACE_FLAG_INHERITED_ACE
@@ -486,7 +513,7 @@ def smbd_set_mapacl(func):
         if ret != 0:
             return {'status' : ret}
         #fullsd = _getntacl(path)
-        set_iftacl(path, sd)
+        #set_iftacl(path, sd)
         
     return wrap_func
 
@@ -557,11 +584,11 @@ def setntacl(rootpath, ck_uid, sddl):
     return {'status' : 0}
 
 def replacentacl_file(fpath, fsd_dic):
-    rsddl = sddic2sddl(fsd_dic)
+    rsddl = replace_sddic2sddl(fsd_dic)
     smbd_set_ntacl(fpath, security.descriptor.from_sddl(rsddl, security.dom_sid()))
 
 def replacentacl_dir(dpath, dsd_dic):
-    rsddl = sddic2sddl(dsd_dic)
+    rsddl = replace_sddic2sddl(dsd_dic)
     smbd_set_ntacl(dpath, security.descriptor.from_sddl(rsddl, security.dom_sid()))
 
     fsd_dic = get_sd_file(dsd_dic)

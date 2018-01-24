@@ -1,10 +1,12 @@
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/export.h>
 #include <linux/uidgid.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <net/genetlink.h>
 #include <linux/posix_acl.h>
 #include "xattr.h"
 #include "byteorder.h"
@@ -743,33 +745,52 @@ int ift_permission_check2(char* value, int mask)
 		}
 	}		
 
-	printk(KERN_INFO "allow right:%d, deny right:%d\n", allow_right, deny_right);
+	printk(KERN_INFO "mask:%d, allow right:%d, deny right:%d\n", mask, allow_right, deny_right);
 	if((deny_right & mask) != 0)
 	{
 		return -1; /* not allow */
 	}
-	return  ~((allow_right & mask) == mask);
+	if ((allow_right & mask) == mask)
+	{
+	    return 0;
+	}
+	else
+	{
+	    return -1;
+	}
 }
 
-int ift_inode_permission(struct dentry* victim, int mask)
+int ift_enable_flag = 0;
+
+int ift_inode_permission(struct inode* victim, int mask, int testflag)
 {
 	int ret = 0;
-	struct inode *inode = victim->d_inode;
+	struct inode *inode = victim; //victim->d_inode;
 	char *value;
 	int error = 0;
 	int value_len;
+	struct dentry *pdentry = NULL;
 
+	/*
+	if (ift_enable_flag == 0 || current_cred()->uid.val == 0)
+	    return 0;
+	*/
+	if (testflag == 0 || current_cred()->uid.val == 0) {
+	    return 0;
+	}
+	pdentry = d_obtain_alias(inode);
+	
 	if(inode->i_op->getxattr != NULL)
 	{
 	
-		value_len = inode->i_op->getxattr(victim, "security.iftacl", NULL, 0);
+		value_len = inode->i_op->getxattr(pdentry, "security.iftacl", NULL, 0);
 		if(value_len < 0)
 		{
 			return value_len;
 		}
 		value = kmalloc(sizeof(char) * (value_len + 1), GFP_KERNEL);
 		memset(value, 0, value_len + 1);
-		error = inode->i_op->getxattr(victim, "security.iftacl", value, value_len);
+		error = inode->i_op->getxattr(pdentry, "security.iftacl", value, value_len);
 		ret = ift_permission_check2(value, mask);
 		kfree(value);
 		printk(KERN_INFO "permission check(0--> success, ~0--> fail):%d\n", ret);
@@ -812,10 +833,11 @@ void iftacl_sd_to_blob(char* blob, struct iftacl_sd *sd)
     }
 }
 
-int iftacl_store_blob(struct dentry* victim, char* blob, int size)
+int iftacl_store_blob(struct inode* victim, char* blob, int size)
 {
-    struct inode *inode = victim->d_inode;
-    return inode->i_op->setxattr(victim, "security.iftacl", blob, size, 0);
+    struct inode *inode = victim;
+    struct dentry *pdentry = d_obtain_alias(inode);
+    return inode->i_op->setxattr(pdentry, "security.iftacl", blob, size, 0);
 }
 
 int iftacl_get_permission(struct dentry* victim, struct iftacl_sd *sd)
@@ -855,11 +877,21 @@ int iftacl_get_permission(struct dentry* victim, struct iftacl_sd *sd)
 	return 0;	
 }
 
-int iftacl_chmod(struct dentry* victim, int *mask)
+int iftacl_chmod(struct inode* victim, int *mask)
 {
 	int ret = 0;
+	struct dentry* pdentry = NULL;
+	
+	struct inode *inode = victim; //victim->d_inode;
+
+	pdentry = d_obtain_alias(inode);
+	inode->i_op->removexattr(pdentry, "system.posix_acl_access");
+	inode->i_op->removexattr(pdentry, "security.iftacl");
+	inode->i_op->removexattr(pdentry, "security.NTACL");
+	return ret;
+	
+	/*
 	int error;
-	struct inode *inode = victim->d_inode;
 	char* blob;
 	int blob_len;
 	struct iftacl_sd sd;
@@ -877,7 +909,7 @@ int iftacl_chmod(struct dentry* victim, int *mask)
 			sd.aces[i].type = 0;
 			sd.aces[i].flags = 0;
 			sd.aces[i].access = mask[i];
-			sd.aces[i].role = (i + 1) % 3 + 3; /* 3->others, 4->co, 5->cg*/
+			sd.aces[i].role = (i + 1) % 3 + 3; // 3->others, 4->co, 5->cg
 			sd.aces[i].uid = 0;
 		}
 		blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd.num_aces;
@@ -892,20 +924,28 @@ int iftacl_chmod(struct dentry* victim, int *mask)
 		kfree(blob);	
 	}
 	return ret;
+	*/
 }
 
-int iftacl_chown(struct dentry *victim, int uid)
+/*
+uid -> new owner's uid
+ */
+int iftacl_chown(struct inode *victim, int uid)
 {
 	int ret = 0;
 	int error;
-	struct inode *inode = victim->d_inode;
+	struct inode *inode = victim; //victim->d_inode;
 	char* blob;
 	int blob_len;
 	struct iftacl_sd sd;
+	struct dentry *pdentry = NULL;
+
+	pdentry = d_obtain_alias(inode);
+	
 	if(inode->i_op->getxattr != NULL)
 	{
-		error = iftacl_get_permission(victim, &sd);
-		if(!error)
+		error = iftacl_get_permission(pdentry, &sd);
+		if(error)
 		{
 			return error;
 		}
@@ -1002,13 +1042,45 @@ void combine_acl(struct iftacl_sd *sd, int i, struct posix_acl *acl, int *cnt)
     }
 }
 
-int iftacl_inherit_dir(struct dentry *victim, struct iftacl_sd *sd, struct posix_acl *acl)
+int iftacl_inherit_dir(struct inode *victim, struct iftacl_sd *sd, struct posix_acl *acl)
 {
 	int ret = 0;
 	char *blob;
 	int blob_len;
 	int cnt = 0;
 	int i = 0;
+	for(i = 0 ; i < acl->a_count ; i++)
+	{
+			
+		if(acl->a_entries[i].e_tag == ACL_USER_OBJ)
+		{
+			acl->a_entries[cnt].e_tag = acl->a_entries[i].e_tag;
+			acl->a_entries[cnt].e_perm = acl->a_entries[i].e_perm;
+			acl->a_entries[cnt].e_uid = acl->a_entries[i].e_uid;
+			cnt += 1;
+		}	
+		else if(acl->a_entries[i].e_tag ==  ACL_GROUP_OBJ)
+		{
+			acl->a_entries[cnt].e_tag = acl->a_entries[i].e_tag;
+			acl->a_entries[cnt].e_perm = acl->a_entries[i].e_perm;
+			acl->a_entries[cnt].e_uid = acl->a_entries[i].e_uid;
+			cnt += 1;
+		}
+		else if(acl->a_entries[i].e_tag == ACL_OTHER)
+		{
+			acl->a_entries[cnt].e_tag = acl->a_entries[i].e_tag;
+			acl->a_entries[cnt].e_perm = acl->a_entries[i].e_perm;
+			acl->a_entries[cnt].e_uid = acl->a_entries[i].e_uid;
+			cnt += 1;
+		}
+		else if(acl->a_entries[i].e_tag == ACL_MASK)
+		{
+			acl->a_entries[cnt].e_tag = acl->a_entries[i].e_tag;
+			acl->a_entries[cnt].e_perm = acl->a_entries[i].e_perm;
+			acl->a_entries[cnt].e_uid = acl->a_entries[i].e_uid;
+			cnt += 1;
+		}
+	}
 	for(i = sd->num_aces - 1 ; i > -1 ; i--)
 	{
 		char af = sd->aces[i].flags;
@@ -1022,7 +1094,7 @@ int iftacl_inherit_dir(struct dentry *victim, struct iftacl_sd *sd, struct posix
 		}
 	}
 	acl->a_count = cnt;
-	blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd->num_aces;
+	blob_len = 4 * 3 + 11 * sd->num_aces;
 	blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
 	iftacl_sd_to_blob(blob, sd);
 	ret = iftacl_store_blob(victim,  blob, blob_len);
@@ -1030,7 +1102,7 @@ int iftacl_inherit_dir(struct dentry *victim, struct iftacl_sd *sd, struct posix
 	return ret;
 }
 
-int iftacl_inherit_file(struct dentry *victim, struct iftacl_sd *sd, struct posix_acl *acl)
+int iftacl_inherit_file(struct inode *victim, struct iftacl_sd *sd, struct posix_acl *acl)
 {
 	int ret = 0;
 	char *blob;
@@ -1050,7 +1122,7 @@ int iftacl_inherit_file(struct dentry *victim, struct iftacl_sd *sd, struct posi
 		}
 	}
 	acl->a_count = cnt;
-	blob_len = 4 * 3 + sizeof(struct iftacl_aces) * sd->num_aces;
+	blob_len = 4 * 3 +  11 * sd->num_aces;
 	blob = (char*)kmalloc(sizeof(char) * blob_len, GFP_KERNEL);
 	iftacl_sd_to_blob(blob, sd);
 	ret = iftacl_store_blob(victim,  blob, blob_len);
@@ -1058,7 +1130,7 @@ int iftacl_inherit_file(struct dentry *victim, struct iftacl_sd *sd, struct posi
 	return ret;
 }
 
-int iftacl_inherit(struct dentry *pvictim, struct dentry *cvictim, struct posix_acl *acl)
+int iftacl_inherit(struct dentry *pvictim, struct inode *cvictim, struct posix_acl *acl)
 {
 	int ret = 0;
 	int error;
@@ -1067,7 +1139,7 @@ int iftacl_inherit(struct dentry *pvictim, struct dentry *cvictim, struct posix_
 	if(inode->i_op->getxattr != NULL)
 	{
 		error = iftacl_get_permission(pvictim, &sd);
-		if(!error)
+		if(error)
 		{
 			return error;
 		}
@@ -1089,3 +1161,59 @@ EXPORT_SYMBOL(ift_inode_permission);
 EXPORT_SYMBOL(iftacl_chmod);
 EXPORT_SYMBOL(iftacl_chown);
 EXPORT_SYMBOL(iftacl_inherit);
+
+static void ift_enable(struct sk_buff *skb, struct genl_info *info)
+{
+    printk(KERN_INFO "++++ift_enable+++\n");
+    ift_enable_flag = 1;
+}
+
+enum attributes {
+    ATTR_DUMMY,
+    ATTR_ENABLE,
+    __ATTR_MAX,
+};
+
+static struct genl_family ift_family = {
+    .id = GENL_ID_GENERATE,
+    .hdrsize = 0,
+    .name = "IFT",
+    .version = 1,
+    .maxattr = __ATTR_MAX, 
+};
+
+static struct nla_policy ift_policy[] = {
+    [ATTR_ENABLE] = {.type = NLA_U32, },
+};
+    
+static struct genl_ops ift_ops[] = {
+    {
+	.cmd = ATTR_ENABLE,
+	.flags = 0,
+	.policy = ift_policy,
+	.doit = ift_enable,
+	.dumpit = NULL,
+    }
+};
+    
+static int __init ift_init(void) {
+    int ret = 0;
+    ret = genl_register_family_with_ops(&ift_family, ift_ops);
+    if(ret != 0) {
+	printk("++++ift-fail-registerFamily++++\n");
+    }
+    return ret;
+}
+
+static void __exit ift_exit(void) {
+    int ret;
+    ret = genl_unregister_family(&ift_family);
+    if(ret !=0) {
+	printk("++++ift-fail-Unregisterfamily+++\n");
+    }
+    return ret;
+}
+
+module_init(ift_init);
+module_exit(ift_exit);
+MODULE_LICENSE("GPL");

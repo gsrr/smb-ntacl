@@ -4,7 +4,7 @@ import ctypes
 import struct
 
 global_libc = ctypes.CDLL("libc.so.6")
-global_libwb = ctypes.CDLL("libwbclient.so.0")
+global_libwb = ctypes.CDLL("libwbclient.so")
 
 WBC_MAXSUBAUTHS = 15
 WBC_SID_STRING_BUFLEN = 15*11+25
